@@ -8,6 +8,8 @@ Usage examples:
   python3 make_short.py Clips/heist.mp4 --title "NO WAY THAT WORKED"
   python3 make_short.py Clips/heist.mp4 --style crop         # full-screen center crop
   python3 make_short.py Clips/                               # every clip in the folder
+  python3 make_short.py "https://youtube.com/watch?v=..."    # download, then make short
+  (works with YouTube, Instagram, TikTok, Twitch, X and more via yt-dlp)
 
 Output goes to Finished/<clip name>_short.mp4. Nothing is uploaded or pushed.
 """
@@ -19,6 +21,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+CLIPS = ROOT / "Clips"
 FINISHED = ROOT / "Finished"
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -104,6 +107,50 @@ def build_filter(style, title_path, title_len=0):
     return chain
 
 
+class _QuietLogger:
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
+
+def download(url):
+    """Download a video from YouTube, Instagram, TikTok, etc. into Clips/."""
+    try:
+        import yt_dlp
+    except ImportError:
+        sys.exit("yt-dlp isn't installed. Run:  pip install yt-dlp")
+    CLIPS.mkdir(exist_ok=True)
+    opts = {
+        "outtmpl": str(CLIPS / "%(title).60B [%(id)s].%(ext)s"),
+        "format": "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "logger": _QuietLogger(),
+        "restrictfilenames": True,
+    }
+    print(f"> downloading {url}")
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            path = Path(ydl.prepare_filename(info)).with_suffix(".mp4")
+    except Exception as e:  # network blocked, private video, login needed...
+        msg = str(e).splitlines()[0]
+        if "403" in msg and "proxy" in msg.lower():
+            msg = "this network blocks that site"
+        sys.exit(f"  download failed: {msg[:200]}")
+    if not path.exists():  # merged file may have a different extension
+        found = sorted(CLIPS.glob(f"*[[]{info['id']}[]].*"))
+        if not found:
+            sys.exit("  download finished but the file wasn't found")
+        path = found[0]
+    print(f"  saved {path.relative_to(ROOT)}")
+    return path
+
+
 def make_short(src, args):
     total = duration_of(src)
     start = parse_time(args.start)
@@ -149,7 +196,8 @@ def make_short(src, args):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("input", help="a video file, or a folder of clips")
+    p.add_argument("input", help="a video file, a folder of clips, or a link "
+                        "(YouTube, Instagram, TikTok, ...)")
     p.add_argument("--start", help="start time, e.g. 1:12")
     p.add_argument("--end", help="end time, e.g. 1:40")
     p.add_argument("--length", type=float, default=30,
@@ -160,6 +208,9 @@ def main():
                         "crop = zoomed center crop that fills the screen")
     args = p.parse_args()
 
+    if args.input.startswith(("http://", "https://", "www.")):
+        make_short(download(args.input), args)
+        return
     src = Path(args.input)
     if src.is_dir():
         clips = sorted(f for f in src.iterdir() if f.suffix.lower() in VIDEO_EXTS)
