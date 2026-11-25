@@ -1,0 +1,6 @@
+# Video files are never committed automatically.
+# They only get pushed when you say "send them" (added with git add -f).
+Clips/*
+!Clips/.gitkeep
+Finished/*
+!Finished/.gitkeep
